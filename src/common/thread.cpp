@@ -608,6 +608,36 @@ std::vector<Common::LogicalProcessor> LinuxProcessors() {
         processors.push_back({static_cast<u32>(cpu), (*package << 16) | *core,
                               static_cast<u8>((std::min)(capacity, 1024U) >> 3)});
     }
+    // Dual-CCD Ryzen X3D parts report equal cpu_capacity on both CCDs; their L3 sizes differ.
+    // Keep the processors with the largest L3 when the sizes are not uniform.
+    const auto l3_bytes = [](u32 cpu) -> u64 {
+        std::ifstream file{"/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                           "/cache/index3/size"};
+        u64 value{};
+        char unit{};
+        if (!(file >> value)) {
+            return 0;
+        }
+        file >> unit;
+        return unit == 'K' ? value << 10 : unit == 'M' ? value << 20 : value;
+    };
+    std::vector<u64> l3(processors.size());
+    u64 largest = 0;
+    for (std::size_t i = 0; i < processors.size(); ++i) {
+        l3[i] = l3_bytes(processors[i].id);
+        largest = (std::max)(largest, l3[i]);
+    }
+    if (largest != 0 && std::any_of(l3.begin(), l3.end(), [&](u64 v) { return v != largest; })) {
+        std::vector<Common::LogicalProcessor> cached;
+        for (std::size_t i = 0; i < processors.size(); ++i) {
+            if (l3[i] == largest) {
+                cached.push_back(processors[i]);
+            }
+        }
+        LOG_INFO(Common, "CPU pinning: {} of {} logical processors share the largest L3 ({} MiB)",
+                 cached.size(), processors.size(), largest >> 20);
+        return cached;
+    }
     return processors;
 }
 
